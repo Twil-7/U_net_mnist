@@ -1,0 +1,96 @@
+1、FCN训练语义分割时，卷积层需要接收许多尺寸大小不同的图像，如何在keras中实现输入大小任意的全卷积网络？？？
+
+当你模型的输入是形状不定的（如多尺度输入），此时model(input_shape)中的input_shape=(None,None,3)。此时，由于高宽的输入未指定，所以其张量形状为（None，None，None，256）。
+
+-------------------------------------------------------------------------------------------------------------------------------------
+
+
+2、对于1*1卷积过程，相当于对长方体feature map做线性加权，这从理论上好想通，但具体在keras下我该用什么语法实现呢？？？
+
+我在知乎上刷到一个很棒的解释：https://www.zhihu.com/question/56024942
+
+也有人问出过类似的问题：卷积神经网络中用1*1卷积来表示，有什么作用或者好处呢？为什么非要加个1*1呢，那不就是简单的线性加权吗？
+
+题主想问的其实是，1*1的卷积不就是多个feature channels之间的线性叠加吗，为什要说成是什么1*1的卷积这种貌似有特殊牛逼功能的概念？题主你想的是对的，1*1的卷积就是多个feature channels线性叠加，只不过这个组合系数恰好可以看成是一个1*1的卷积。这种表示的好处是，完全可以回到模型中其他常见N*N的框架下，不用定义新的层，这样的话借助之前的Conv语法就可以直接实现了。
+
+细细想来的确如此，假设feature map1000个，我想将其线性加权成16个，只用取16个（1000，1，1）的卷积，分别卷完再累加即可。
+
+
+----------------------------------------------------------------------------------------------------------------------------------
+
+3、keras反卷积层应该如何实现？
+
+我想将反卷积层（滤波器大小为4x4的512个滤波器）转换为下一层滤波器大小为128的反卷积层7x7。（使用deconvolution2D）。但是此操作将导致128个过滤器的大小为8x8。我想要7x7怎么办呢？
+
+d6 = Deconvolution2D(128, 5, 5, subsample=(2,2),  activation='relu',init='uniform', output_shape=(None, 128, 7, 7), border_mode='same')(d6)
+
+或者是不是可以用UpSampling2D来实现？
+
+我这里将反卷积分为两个操作，一个是UpSampling2D()，用上采样将原始图片扩大，然后用Conv2D()这个函数进行卷积操作，就可以完成简单的反卷积：
+
+keras.layers.convolutional.UpSampling2D(size=(2, 2), data_format=None)，核心代码就是一个K.resize_imagse操作，UpSampling2D(size=(2,2))就可以将图片扩大1倍，比如原来为28*28的图片，就会变为56*56。接下来就可以进行卷积操作：
+
+keras.layers.convolutional.Conv2D(filters, kernel_size, strides=(1, 1), padding='valid', data_format=None, dilation_rate=(1, 1), activation=None, use_bias=True, kernel_initializer='glorot_uniform', bias_initializer='zeros', kernel_regularizer=None, bias_regularizer=None, activity_regularizer=None, kernel_constraint=None, bias_constraint=None)
+
+# deconv1 1/16
+self.deconv1 = nn.ConvTranspose2d(512, 512, kernel_size=3, stride=2, padding=1, output_padding=1)
+self.bn1 = nn.BatchNorm2d(512)
+self.relu1 = nn.ReLU()
+
+nn.ConvTranspose2d的功能是进行反卷积操作：
+
+nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=1, padding=0,  output_padding=0, groups=1, bias=True, dilation=1)
+in_channels(int) – 输入信号的通道数
+out_channels(int) – 卷积产生的通道数
+kerner_size(int or tuple) - 卷积核的大小
+stride(int or tuple,optional) - 卷积步长，即要将输入扩大的倍数。
+padding(int or tuple, optional) - 输入的每一条边补充0的层数，高宽都增加2*padding
+output_padding(int or tuple, optional) - 输出边补充0的层数，高宽都增加padding
+groups(int, optional) – 从输入通道到输出通道的阻塞连接数
+bias(bool, optional) - 如果bias=True，添加偏置
+dilation(int or tuple, optional) – 卷积核元素之间的间距
+
+这个问题我已经解决了。原始feature map：28*28-64，我使用model.add(Conv2DTranspose(64, kernel_size=(6, 6), activation='relu',  padding="valid", strides=2))，就可以反卷积成：60*60-64。
+
+------------------------------------------------------------------------------------------------------------------------------------------
+
+4、不同的heatmap层，我该用什么语法将它们融合？
+
+DenseNet和Inception中采用的多是concatenate操作，而ResNet更多采用add操作，这两个操作有什么异同。翻译过来，都是特征融合，只不过融合的方式不同。add层就是相加，矩阵相加，H,W,C都不改变，只是相应元素的值会改变。concatenate就是拼接的意思，H、W不改变，但是通道数增加。
+
+我突然发觉，model.add和这里面的add不会是一个意思吧......
+
+concatenate操作：网络结构设计中很重要的一种操作，经常用于将特征联合，多个卷积特征提取框架提取的特征融合或者是将输出层的信息进行融合。DenseNet是做通道的合并。而concatenate是通道数的合并，也就是说描述图像本身的特征增加了，而每一特征下的信息是没有增加。
+
+add操作：是信息之间的叠加。Resnet是做值的叠加，通道数是不变的。add是描述图像的特征下的信息量增多了，但是描述图像的维度本身并没有增加，只是每一维下的信息量在增加。
+
+http://www.51zixue.net/deeplearning/595.html
+
+model1 = Sequential()
+model1.add(Conv2D(32, (3, 3), activation='relu', input_shape=(bands, frames, 1)))
+print(model1.output_shape)
+model1.add(MaxPooling2D(pool_size=(2, 2)))
+model1.add(Flatten())
+
+model2 = Sequential()
+model2.add(Conv2D(32, (9, 9), activation='relu', input_shape=(bands, frames, 1)))
+print(model2.output_shape)
+model2.add(MaxPooling2D(pool_size=(4, 4)))
+model2.add(Flatten())
+
+modelall = Sequential()
+modelall.add(concatenate([model1, model2], axis=1))
+modelall.add(Dense(100, activation='relu'))
+
+这段代码是将两个model提取到的特征，一起融合的，和我这里还不太一样。
+
+5、反卷积上采样后，得到的图片尺寸并不合适，我该怎么resize处理？
+
+这个问题在3中一并解决掉了。如果反卷积仍然用和之前一样5*5的尺寸，会导致反卷积后的层数size不匹配。这时可以稍微改改反卷积核的size，从而使之恰好对应上。
+
+我看到了一篇文章，完美解决不对应问题：上采样+卷积、padding = same
+
+https://blog.csdn.net/qq_41775810/article/details/82722307
+
+
+6、我看到一个非常适合我的小项目：https://blog.csdn.net/leonardohaig/article/details/105597093
